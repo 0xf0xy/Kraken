@@ -2,12 +2,8 @@
 <p align="center"><em>WPA/WPA2 cracking toolkit</em></p>
 
 <p align="center">
-  <a href="https://www.python.org/"> 
-    <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white" />
-  </a>
-  <a href="https://opensource.org/licenses/MIT">
-    <img src="https://img.shields.io/badge/license-MIT-3DA639?style=flat&logo=OpenSourceInitiative&logoColor=white" />
-  </a>
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=flat&logo=python&logoColor=white"/></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/license-MIT-3DA639?style=flat&logo=OpenSourceInitiative&logoColor=white"/></a>
 </p>
 
 <br>
