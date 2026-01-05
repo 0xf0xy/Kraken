@@ -50,7 +50,7 @@ RESET = "\033[0m"
 
 class Kraken:
     """
-    Kraken:
+    Kraken: WPA/WPA2 audit toolkit.
     """
 
     def __init__(self):

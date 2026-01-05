@@ -29,7 +29,7 @@ import os
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Kraken: WPA/WPA2 handshake sniffer and cracker",
+        description="Kraken: WPA/WPA2 audit toolkit",
         epilog="You need root privileges to run this tool.",
         add_help=False,
     )

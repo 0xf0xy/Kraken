@@ -11,7 +11,7 @@ setup(
             "kraken=kraken.cli:main",
         ],
     },
-    description="Kraken: WPA/WPA2 handshake sniffer and cracker",
+    description="WPA/WPA2 audit toolkit",
     author="0xf0xy",
     license="MIT",
 )
