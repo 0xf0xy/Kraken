@@ -83,107 +83,9 @@ class Kraken:
         return R[:blen]
 
     @staticmethod
-    def list_interfaces():
-        """
-        List all available network interfaces.
-        """
-        os.system("clear")
-
-        try:
-            iw_dev = subprocess.check_output(
-                ["iw", "dev"], stderr=subprocess.DEVNULL
-            ).decode()
-            iw_list = subprocess.check_output(
-                ["iw", "list"], stderr=subprocess.DEVNULL
-            ).decode()
-            ip_links = (
-                subprocess.check_output(["ip", "-o", "link", "show"])
-                .decode()
-                .splitlines()
-            )
-
-        except Exception as e:
-            print(f"    [{RED}x{RESET}] Failed to use 'iw' or 'ip': {e}")
-
-        phy_map = {}
-
-        for block in [b for b in iw_dev.split("\n\n") if b.strip()]:
-            lines = [l.strip() for l in block.splitlines() if l.strip()]
-
-            if not lines or not lines[0].startswith("phy#"):
-                continue
-
-            phy = lines[0].replace("phy#", "phy")
-
-            for i, l in enumerate(lines):
-                if l.startswith("Interface"):
-                    iface = l.split()[1]
-                    addr = "N/A"
-                    itype = "N/A"
-
-                    for j in range(i + 1, len(lines)):
-                        if lines[j].startswith("addr "):
-                            addr = lines[j].split()[1]
-
-                        if lines[j].startswith("type "):
-                            itype = lines[j].split()[1]
-
-                    phy_map.setdefault(phy, []).append(
-                        {"iface": iface, "addr": addr, "type": itype}
-                    )
-
-        monitor_phys = set()
-
-        for block in [b for b in iw_list.split("Wiphy ") if b.strip()]:
-            header = block.splitlines()[0].strip()
-            phy = header if header.startswith("phy") else f"phy{header}"
-
-            if "Supported interface modes:" in block and "* monitor" in block:
-                monitor_phys.add(phy)
-
-        rows = []
-
-        for phy, ifaces in phy_map.items():
-            supports = phy in monitor_phys
-
-            for info in ifaces:
-                iface = info["iface"]
-                addr = info["addr"].upper()
-                cur_type = info["type"]
-                state = (
-                    "UP"
-                    if any(iface in l and "state UP" in l for l in ip_links)
-                    else "DOWN"
-                )
-                rows.append(
-                    {
-                        "iface": iface,
-                        "phy": phy,
-                        "mac": addr,
-                        "mode": cur_type,
-                        "state": state,
-                        "monitor_capable": supports,
-                    }
-                )
-
-        print(
-            f" {'IFACE':7} | {'PHY':4} | {'MODE':8} | {'STATE':6} | {'MAC':17} | SUPPORT"
-        )
-        print("─" * 80)
-
-        for r in rows:
-            support = (
-                f"{GREEN}Yes{RESET}" if r["monitor_capable"] else f"{RED}No{RESET}"
-            )
-            mode_color = (
-                f"{BLUE}{r['mode']}{RESET}" if r["mode"] == "monitor" else r["mode"]
-            )
-            print(
-                f" {r['iface']:<7} | {r['phy']:<4} | {mode_color:<8} | {r['state']:<6} | {r['mac']:<17} | {support}"
-            )
-
-        print("─" * 80)
-        print("\nUse 'sudo kraken start/stop <iface>' to enable/disable monitor mode.")
+    def _iface_exists(iface: str) -> bool:
+        """Check whether a network interface exists."""
+        return os.path.exists(f"/sys/class/net/{iface}")
 
     @staticmethod
     def start_monitor(iface: str):
@@ -195,22 +97,30 @@ class Kraken:
         """
         os.system("clear")
 
+        if not Kraken._iface_exists(iface):
+            print(f"    [{RED}x{RESET}] Interface '{iface}' does not exist.")
+
+            return
+
         print(f"Enabling monitor mode on interface {BLUE}{iface}{RESET}")
         print("─" * 50)
 
         try:
             subprocess.run(["systemctl", "stop", "NetworkManager"], check=False)
             subprocess.run(["systemctl", "stop", "wpa_supplicant"], check=False)
-            subprocess.run(["ip", "link", "set", iface, "down"], check=True)
-            subprocess.run(["iw", iface, "set", "type", "monitor"], check=True)
-            subprocess.run(["ip", "link", "set", iface, "up"], check=True)
+            subprocess.run(["iw", "dev", iface, "del"], check=True)
+            subprocess.run(
+                ["iw", "phy", "phy0", "interface", "add", "mon0", "type", "monitor"],
+                check=True,
+            )
+            subprocess.run(["ip", "link", "set", "mon0", "up"], check=True)
 
             print(
-                f"    [{GREEN}✓{RESET}] Interface {iface} is now in {GREEN}monitor{RESET} mode.\n"
+                f"    [{GREEN}✓{RESET}] Interface '{iface}' is now in {GREEN}monitor{RESET} mode.\n"
             )
 
         except subprocess.CalledProcessError:
-            print(f"    [{RED}x{RESET}] Failed to change interface {iface} mode.\n")
+            print(f"    [{RED}x{RESET}] Failed to change interface '{iface}' mode.\n")
 
     @staticmethod
     def stop_monitor(iface: str):
@@ -222,21 +132,30 @@ class Kraken:
         """
         os.system("clear")
 
+        if not Kraken._iface_exists(iface):
+            print(f"    [{RED}x{RESET}] Interface '{iface}' does not exist.")
+
+            return
+
         print(f"Disabling monitor mode on interface {BLUE}{iface}{RESET}")
         print("─" * 50)
+
         try:
-            subprocess.run(["ip", "link", "set", iface, "down"], check=True)
-            subprocess.run(["iw", iface, "set", "type", "managed"], check=True)
-            subprocess.run(["ip", "link", "set", iface, "up"], check=True)
+            subprocess.run(["iw", "dev", iface, "del"], check=True)
+            subprocess.run(
+                ["iw", "phy", "phy0", "interface", "add", "wlan0", "type", "managed"],
+                check=True,
+            )
+            subprocess.run(["ip", "link", "set", "wlan0", "up"], check=True)
             subprocess.run(["systemctl", "start", "wpa_supplicant"], check=False)
             subprocess.run(["systemctl", "start", "NetworkManager"], check=False)
 
             print(
-                f"    [{GREEN}✓{RESET}] Interface {iface} is now in {GREEN}managed{RESET} mode.\n"
+                f"    [{GREEN}✓{RESET}] Interface '{iface}' is now in {GREEN}managed{RESET} mode.\n"
             )
 
         except subprocess.CalledProcessError:
-            print(f"    [{RED}x{RESET}] Failed to change interface {iface} mode.\n")
+            print(f"    [{RED}x{RESET}] Failed to change interface '{iface}' mode.\n")
 
     @staticmethod
     def channel_hopper(iface: str, delay: int) -> threading.Event:

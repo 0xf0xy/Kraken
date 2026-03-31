@@ -79,12 +79,6 @@ def build_parser():
     crack.add_argument("-f", "--file", required=True, help="Handshake JSON file")
 
     meta = parser.add_argument_group("Information")
-    meta.add_argument(
-        "-l",
-        "--list",
-        action="store_true",
-        help="List available interfaces",
-    )
     meta.add_argument("-h", "--help", action="help", help="Show this help menu")
     meta.add_argument(
         "-v",
@@ -106,10 +100,7 @@ def main():
 
     kraken = Kraken()
 
-    if args.list:
-        kraken.list_interfaces()
-
-    elif args.command == "start":
+    if args.command == "start":
         kraken.start_monitor(args.iface)
 
     elif args.command == "stop":
