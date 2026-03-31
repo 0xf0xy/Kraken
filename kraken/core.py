@@ -578,7 +578,6 @@ class Kraken:
                     f"    Elapsed    : {time.strftime('%H:%M:%S', time.gmtime(elapsed))}\n"
                 )
                 print("\033[F\033[K" * 7, end="")
-                time.sleep(0.1)
 
                 if result:
                     found = result
