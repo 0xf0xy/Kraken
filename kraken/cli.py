@@ -1,7 +1,7 @@
 """
 MIT License
 
-Copyright (c) 2025 0xf0xy
+Copyright (c) 2026 0xf0xy
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,6 +22,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """
 
+from kraken.utils import start_monitor, stop_monitor
 from kraken.core import Kraken
 import argparse
 import os
@@ -101,10 +102,10 @@ def main():
     kraken = Kraken()
 
     if args.command == "start":
-        kraken.start_monitor(args.iface)
+        start_monitor(args.iface)
 
     elif args.command == "stop":
-        kraken.stop_monitor(args.iface)
+        stop_monitor(args.iface)
 
     elif args.command == "dump":
         kraken.dump_networks(args.iface, args.bssid, args.channel)
