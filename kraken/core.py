@@ -36,6 +36,7 @@ from scapy.all import (
 from .utils import (
     RED,
     GREEN,
+    YELLOW,
     RESET,
     check_password,
     channel_hopper,
@@ -236,14 +237,17 @@ class Kraken:
         """
         os.system("clear")
 
+        print(f"{YELLOW}Don't use deauth on broadcast to capture handshakes.{RESET}")
+        print(f"{YELLOW}It can cause multiple reconnections, generating invalid handshakes.{RESET}\n\n")
+
         if client:
             client.upper()
 
         else:
             client = "FF:FF:FF:FF:FF:FF"
 
-        print(f"Sending Deauth to '{client}' on AP: {target_bssid.upper()}")
-        print("─" * 65)
+        print(f"Sending deauth to '{client}' | AP: {target_bssid.upper()}")
+        print("─" * 70)
 
         dot11 = Dot11(
             type=0,
@@ -256,9 +260,9 @@ class Kraken:
 
         for i in range(1, pkts + 1):
             sendp(pkt, iface=iface, verbose=0)
-            print(f"   → Sent {i}/{pkts} deauth packets", end="\r", flush=True)
+            print(f"    --→ Sent {i}/{pkts} deauth packets", end="\r", flush=True)
 
-        print(f"\n\n{GREEN}Deauth attack complete.{RESET}")
+        print(f"    [{GREEN}✓{RESET}] ")
 
     @staticmethod
     def crack_handshake(wordlist: str, handshake: str):
