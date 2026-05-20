@@ -1,4 +1,5 @@
 <h1 align="center">KRAKEN</h1>
+
 <p align="center">
   <em>wpa/wpa2 audit toolkit</em>
 </p>
@@ -11,17 +12,28 @@
 
 ---
 
-<br>
-
 ## > Overview
 
-**Kraken** is a wireless security auditing framework targeting WPA/WPA2 networks.
+**Kraken** is a wireless security auditing framework focused on WPA/WPA2 networks.  
+The project is designed for protocol research, wireless security studies, and controlled offensive security testing.
 
-It operates by capturing 4-way authentication handshakes, extracting key material for offline analysis, and performing dictionary-based password recovery.
+Kraken operates by:
 
-Engineered for protocol research and controlled offensive security testing.
+* Capturing WPA/WPA2 4-way handshakes
+* Extracting authentication material for offline analysis
+* Performing dictionary-based password recovery
+* Assisting wireless auditing workflows in Linux environments
 
-<br>
+---
+
+## > Features
+
+* WPA/WPA2 handshake capture
+* Offline password auditing using wordlists
+* Wireless interface management
+* Deauthentication attack support
+
+---
 
 ## > Installation
 
@@ -29,17 +41,36 @@ Engineered for protocol research and controlled offensive security testing.
 git clone https://github.com/0xf0xy/Kraken.git
 cd Kraken
 sudo pip install .
+```
+
+Verify installation:
+
+```bash
 kraken -h
 ```
 
-<br>
+---
+
+## > Requirements
+
+* Python 3.10+
+* Linux system
+* Wireless adapter with monitor mode support
+
+---
+
+## > Project Status
+
+Kraken is currently on hold and remains in an experimental stage.  
+The project is intended for research and educational purposes, and features may change during development.
+
+---
 
 ## > Warning
 
 This project is provided for **educational and research purposes only**.  
-Any misuse is your responsibility.
-
-<br>
+Only test networks and devices you own or are explicitly authorized to audit.  
+You are responsible for any misuse of this software.
 
 ---
 
