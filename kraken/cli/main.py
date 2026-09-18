@@ -1,11 +1,16 @@
 import argparse
 from importlib.metadata import version
 import os
+import subprocess
 from typing import Any
 
 from kraken.core.engine import Kraken
 from kraken.core.models import Network
 from kraken.services.wireless import WirelessError
+
+
+def _clear_terminal() -> None:
+    subprocess.run(["clear"], check=False)
 
 
 def red(text: str) -> str:
@@ -130,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def display_networks(networks: dict[str, Network]) -> None:
-    os.system("clear")
+    _clear_terminal()
     print(" ESSID                     | BSSID             | ENC   | CH  | PWR   | BEAC")
     print("─" * 75)
 
@@ -145,7 +150,7 @@ def display_networks(networks: dict[str, Network]) -> None:
 
 
 def display_handshake(capture: Any, channel: int) -> None:
-    os.system("clear")
+    _clear_terminal()
     print(f"BSSID     : {capture.target_bssid}")
     print(f"Channel   : {channel}")
     print("─" * 55)
